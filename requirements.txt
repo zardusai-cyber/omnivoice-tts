@@ -1,0 +1,12 @@
+torch>=2.5.0
+torchao>=0.5.0
+transformers
+tokenizers
+soundfile
+numpy
+fastapi
+uvicorn
+pydantic
+einops
+accelerate
+huggingface_hub

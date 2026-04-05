@@ -1,0 +1,196 @@
+"""
+OmniVoice INT4 Quantized Gradio Server (XPU + TorchAO)
+
+INT4 weight-only quantization for maximum VRAM savings.
+- Disk: ~2.0 GB (vs 2.24 GB INT8, vs 3.81 GB BF16)
+- RAM: ~2.2 GB (vs 3.5 GB INT8, vs 6 GB BF16)
+- Quality: ~95-98% of BF16 (slight artifacts in quiet passages)
+"""
+
+import os
+import gc
+import time
+import numpy as np
+
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+from omnivoice import OmniVoice
+import torch
+import gradio as gr
+import soundfile as sf
+import tempfile
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_SRC = os.path.join(BASE_DIR, "OmniVoice")
+MODEL_INT4 = os.path.join(BASE_DIR, "OmniVoice_INT4")
+
+
+def apply_quantization(model):
+    from torchao.quantization import quantize_, Int4WeightOnlyConfig
+
+    print("Applying INT4 weight-only quantization...")
+    try:
+        quantize_(model.llm, Int4WeightOnlyConfig(group_size=128))
+        quantize_(model.audio_heads, Int4WeightOnlyConfig(group_size=128))
+    except ImportError as e:
+        if "mslk" in str(e):
+            print("\n" + "=" * 60)
+            print("ERROR: INT4 quantization requires 'mslk' package")
+            print("which is not available on PyPI for Windows.")
+            print()
+            print("WORKAROUND: Use INT8 quantization instead:")
+            print("  start_int8_compile.bat  (with torch.compile)")
+            print("  start_int8.bat          (without compile)")
+            print()
+            print("INT8 provides:")
+            print("  - VRAM: ~3.5 GB (vs ~2.2 GB INT4)")
+            print("  - Quality: ~99% of BF16")
+            print("  - Speed: Similar to INT4")
+            print("=" * 60)
+        raise
+    except Exception as e:
+        print(f"\n[ERROR] INT4 quantization failed: {e}")
+        print("Falling back to INT8...")
+        from torchao.quantization import Int8WeightOnlyConfig
+
+        quantize_(model.llm, Int8WeightOnlyConfig())
+        quantize_(model.audio_heads, Int8WeightOnlyConfig())
+
+    quantized_count = sum(
+        1 for _, m in model.named_modules() if "Int4WeightOnly" in type(m).__name__
+    )
+    if quantized_count == 0:
+        quantized_count = sum(
+            1 for _, m in model.named_modules() if "Int8WeightOnly" in type(m).__name__
+        )
+        print(f"Using INT8 fallback (quantized modules: {quantized_count})")
+    else:
+        print(f"Quantized modules: {quantized_count}")
+    return model
+
+
+def load_quantized_state(model, state_path):
+    print(f"Loading quantized state from {state_path}...")
+    state_dict = torch.load(state_path, map_location="cpu", weights_only=True)
+    model.load_state_dict(state_dict, strict=False)
+    print("Quantized state loaded")
+
+
+print(f"Loading OmniVoice model structure from: {MODEL_SRC}")
+model = OmniVoice.from_pretrained(MODEL_SRC, device_map="xpu", dtype=torch.bfloat16)
+
+model = apply_quantization(model)
+
+state_path = os.path.join(MODEL_INT4, "quantized_state.pt")
+if os.path.exists(state_path):
+    load_quantized_state(model, state_path)
+else:
+    print(
+        "WARNING: quantized_state.pt not found. Using quantized but untrained weights."
+    )
+
+print("Model loaded and optimized!")
+
+
+def process_audio(audio_tensor):
+    audio_np = audio_tensor.cpu().numpy()
+    if audio_np.ndim > 1:
+        audio_np = audio_np.squeeze()
+    audio_np = np.clip(audio_np, -1.0, 1.0)
+    audio_np = (audio_np * 32767).astype(np.int16)
+    return audio_np.astype(np.float32) / 32767.0
+
+
+def tts_clone(text, ref_audio, num_steps, speed):
+    tmp_file = None
+    try:
+        if ref_audio is None:
+            audio = model.generate(
+                text=text, num_step=int(num_steps), speed=float(speed)
+            )
+        else:
+            sr, data = ref_audio
+            tmp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            sf.write(tmp_file.name, data, sr)
+            tmp_file.close()
+            audio = model.generate(
+                text=text,
+                ref_audio=tmp_file.name,
+                num_step=int(num_steps),
+                speed=float(speed),
+            )
+        return (24000, process_audio(audio[0]))
+    finally:
+        if tmp_file and os.path.exists(tmp_file.name):
+            try:
+                os.unlink(tmp_file.name)
+            except Exception:
+                pass
+        gc.collect()
+
+
+def tts_design(text, instruct, num_steps, speed):
+    audio = model.generate(
+        text=text, instruct=instruct, num_step=int(num_steps), speed=float(speed)
+    )
+    return (24000, process_audio(audio[0]))
+
+
+def tts_auto(text, num_steps, speed):
+    audio = model.generate(text=text, num_step=int(num_steps), speed=float(speed))
+    return (24000, process_audio(audio[0]))
+
+
+with gr.Blocks(title="OmniVoice TTS Server (INT4)") as demo:
+    gr.Markdown("# OmniVoice TTS Server (INT4 Quantized + XPU)")
+    gr.Markdown(
+        "**Maximum VRAM savings** - ~2.2 GB runtime memory (vs 3.5 GB INT8, 6 GB BF16)"
+    )
+
+    with gr.Tab("Voice Cloning"):
+        with gr.Row():
+            text_clone = gr.Textbox(label="Text to speak", lines=3)
+            ref_audio_clone = gr.Audio(label="Reference Audio (optional)", type="numpy")
+        with gr.Row():
+            num_steps_clone = gr.Slider(
+                8, 64, value=32, step=1, label="Diffusion Steps"
+            )
+            speed_clone = gr.Slider(0.5, 2.0, value=1.0, step=0.1, label="Speed")
+        btn_clone = gr.Button("Generate")
+        out_clone = gr.Audio(label="Output")
+        btn_clone.click(
+            tts_clone,
+            [text_clone, ref_audio_clone, num_steps_clone, speed_clone],
+            out_clone,
+        )
+
+    with gr.Tab("Voice Design"):
+        text_design = gr.Textbox(label="Text to speak", lines=3)
+        instruct_design = gr.Textbox(
+            label="Voice Description (e.g., 'female, low pitch, british accent')",
+            lines=2,
+        )
+        with gr.Row():
+            num_steps_design = gr.Slider(
+                8, 64, value=32, step=1, label="Diffusion Steps"
+            )
+            speed_design = gr.Slider(0.5, 2.0, value=1.0, step=0.1, label="Speed")
+        btn_design = gr.Button("Generate")
+        out_design = gr.Audio(label="Output")
+        btn_design.click(
+            tts_design,
+            [text_design, instruct_design, num_steps_design, speed_design],
+            out_design,
+        )
+
+    with gr.Tab("Auto Voice"):
+        text_auto = gr.Textbox(label="Text to speak", lines=3)
+        with gr.Row():
+            num_steps_auto = gr.Slider(8, 64, value=32, step=1, label="Diffusion Steps")
+            speed_auto = gr.Slider(0.5, 2.0, value=1.0, step=0.1, label="Speed")
+        btn_auto = gr.Button("Generate")
+        out_auto = gr.Audio(label="Output")
+        btn_auto.click(tts_auto, [text_auto, num_steps_auto, speed_auto], out_auto)
+
+if __name__ == "__main__":
+    demo.launch(server_name="0.0.0.0", server_port=7860)

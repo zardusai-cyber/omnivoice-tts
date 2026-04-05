@@ -1,0 +1,37 @@
+# Model weights (users download these separately)
+OmniVoice/model.safetensors
+OmniVoice/tokenizer.json
+OmniVoice/audio_tokenizer/model.safetensors
+OmniVoice_FP32/model.safetensors
+OmniVoice_FP32/tokenizer.json
+OmniVoice_FP32/audio_tokenizer/model.safetensors
+OmniVoice_INT8/model.safetensors
+OmniVoice_INT8/tokenizer.json
+OmniVoice_INT8/audio_tokenizer/model.safetensors
+OmniVoice_INT8/quantized_state.pt
+OmniVoice_INT4/
+OmniVoice_INT4_compiled/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+
+# Cache
+.ruff_cache/
+compiled_cache/
+
+# User voices (optional to include)
+voices/*.wav
+voices/*.mp3
+voices/*.flac
+!voices/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
