@@ -1,3 +1,29 @@
+---
+language:
+  - en
+  - fr
+  - de
+  - es
+  - zh
+  - ja
+  - ko
+  - ru
+  - ar
+  - hi
+  - pt
+  - it
+license: mit
+tags:
+  - text-to-speech
+  - tts
+  - voice-cloning
+  - intel-xpu
+  - xpu
+  - pytorch
+  - fastapi
+  - openai-compatible
+  - omnivoice
+---
 # OmniVoice TTS Server
 
 OmniVoice TTS server with **Intel Arc iGPU / dGPU** support via PyTorch nightly XPU. Includes multiple quantization variants (BF16, INT8, INT4) for different VRAM budgets.
