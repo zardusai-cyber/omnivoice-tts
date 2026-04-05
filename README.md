@@ -114,9 +114,25 @@ GET /docs
 
 ## Adding Custom Voices
 
+### Manual Method
 1. Place a WAV/MP3/FLAC file (15+ seconds of clean speech) in the `voices/` folder
 2. Name it descriptively (e.g., `my-voice.wav`)
 3. Call `POST /v1/audio/voices/reload` or restart the server
+
+### Telegram Voice Cloning Bot (Recommended)
+
+Clone voices in real-time from Telegram voice messages! The companion bot runs on the same machine as the TTS server and handles everything automatically:
+
+1. Send a voice message on Telegram
+2. Bot cuts it to 15 seconds, converts to WAV
+3. You give it a name
+4. It saves to the voices folder and reloads the server instantly
+
+**Setup:**
+1. Create a bot via [@BotFather](https://t.me/BotFather)
+2. Clone the companion bot: https://github.com/zardusai-cyber/zardbot-voice-companion
+3. Set your bot token and run it on the same machine as the TTS server
+4. Use `/addvoice` and send a voice message!
 
 ## Server Variants
 
